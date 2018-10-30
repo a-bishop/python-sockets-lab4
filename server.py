@@ -27,6 +27,9 @@ else:
     # This class will maintain two data structures: a queue (implemented with a Python
     # collections.deque() object), and a set (implemented with a Python set() object).
 
+    self.q = collections.deque()
+    self.running = set()
+
     # The queue will hold all the waiting client connections; they haven’t started yet, they’ve just been
     # added to the queue, waiting to be executed. The main program calls a method of this class to
     # add new client threads to the queue.
@@ -48,6 +51,12 @@ else:
 # The manager sits in an infinite loop, executing the following pseudocode:
 
 # check the “ running ” threads; if any of them have stopped, remove them from the set.
+kick = []
+for t in self.running:
+    if not t.isAlive(): kick.append(t)
+for t in kick:
+    self.running.remove(t)
+
 # check the waiting queue:
     # if empty, sleep for 1 second and return to the top of the loop;
     # if it has an item:
@@ -57,6 +66,13 @@ else:
                 # remove the next client thread from the queue
                 # start the thread
                 # add the thread to the running set
+
+# Note: Main program won't terminate while it has a child thread still running.
+# To force all the threads to stop, you will have to use an operating-system kill. 
+# On linux/mac, you can do the following:
+    # ps aux | grep python - gives a list of python processes; find the
+    # server.py process, and note the pid (second column) number (e.g. 12573)
+    # kill <pid> - forces all threads under that process id to stop.
 
 # declare functions
 def recvWriteFile(filename, conn, size):
