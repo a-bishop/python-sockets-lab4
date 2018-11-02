@@ -1,58 +1,26 @@
 # ICS 226 Lab 4
 # Andrew Bishop
+# Nov 2 /18
 
 import sys
 import socket
 import os
 import collections
-from threading import Thread
-
-# declare variables
-port = int(sys.argv[1])
-numClients = int(sys.argv[2])
-if "-v" in sys.argv:
-    verbose = True
-else:
-    verbose = False
-
-# open socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-# bind socket to host and port
-s.bind(('', port))
-# listen
-s.listen(numClients) # <-- how many concurrent clients can be 
-            # queued, waiting for handshake
-
-if verbose:
-    print('server waiting on port %s' % port)
-    print('number of concurrent clients: %s' % numClients)
+import time
+from threading import Thread, Lock
 
 # Your server, when it receives a new client connection with the sock.accept() method,
 # creates a client handler thread but does not start it! It simply hands the waiting client thread to
 # the “manager”.
-
-for num in range(1, numClients):
-    conn, addr = s.accept()
-    if verbose:
-        print('server connected to client at ' + addr[0] + ':' + str(addr[1]))
-    thread = ClientHandler(num, conn, addr)
-    manager.addThread(thread)
-
-# The ClientHandler class
-
-# You must create a subclass of threading.Thread to handle all communication with a single
-# client.
-
 class ClientHandler(Thread):
 
-    def __init__(self):
-        Thread.__init__(self, num, conn, addr)
-        self.num = num
+    def __init__(self, conn):
+        Thread.__init__(self)
         self.conn = conn
-        self.addr = addr
 
     def run(self):
-        print "Starting " + self.name
+        conn = self.conn
+        print ("\n\nStarting " + self.name)
 
         # function definitions
         def recvWriteFile(filename, conn, size):
@@ -62,7 +30,7 @@ class ClientHandler(Thread):
                     data = conn.recv(min(1024, dataRemaining))
                     if (dataRemaining == len(data)):
                         f.write(data)
-                        conn.send("DONE".encode())
+                        conn.send("DONE".encode("utf-8"))
                         dataRemaining = 0
                     else:
                         f.write(data)
@@ -76,84 +44,171 @@ class ClientHandler(Thread):
                     dataRemaining -= len(data)
                     if (dataRemaining == 0):
                         conn.send(data)
-                        conn.send("DONE".encode())
+                        conn.send("DONE".encode("utf-8"))
                         break
                     else:
                         conn.send(data)
 
             # send READY message
-        conn.send('READY'.encode())
+        conn.send('READY'.encode("utf-8"))
 
-        data = conn.recv(1024).decode()
-        data = data.split(' ')
-        request = data[0]
-        filename = data[1]
-        filepath = './'
+        try:
+            data = conn.recv(1024).decode("utf-8")
+            data = data.split(' ')
+            request = data[0]
+            filename = data[1]
+            filepath = './'
+            if verbose >= 1:
+                print('server receiving request: ' + request)
+                print('filename', filename)
+        except:
+            if verbose >= 1:
+                print("did not receive a request")
 
         ### ---- handle GET requests ----- ###
         if request == 'GET':
-            if verbose:
-                print('server receiving request: ' + request)
             # check if file requested is on server
             if os.path.isfile(filename) == True:
-                conn.send('OK'.encode())
-                response = conn.recv(1024).decode()
+                conn.send('OK'.encode("utf-8"))
+                response = conn.recv(1024).decode("utf-8")
                 if response == 'READY':
                     size = os.path.getsize(filename)
                     size_bytes = size.to_bytes(8, byteorder='big', signed=False)
                     conn.send(size_bytes)
-                    response = conn.recv(1024).decode()
+                    response = conn.recv(1024).decode("utf-8")
                     if response == 'OK':
-                        if verbose:
+                        if verbose >= 1:
                             print('server sending %d bytes' % size)
                         readSendFile(filename, conn, size)
+                else:
+                    print("notOK")
             else:
                 msg = 'ERROR: file %s does not exist' % filename
-                conn.send(msg.encode())
+                conn.send(msg.encode("utf-8"))
                 
         ### --- Handle PUT Requests --- ###
         elif request == 'PUT':
-            if verbose:
-                print('server receiving request: ' + request)
             # check if OS can create file (permissions, etc)
             if os.access(filepath, os.X_OK):
-                conn.send('OK'.encode())
+                conn.send('OK'.encode("utf-8"))
                 # receive number of bytes
                 size = int.from_bytes(conn.recv(8), byteorder='big', signed=False)
-                if verbose:
+                if verbose >= 1:
                     print('server receiving %d bytes' % size)
-                conn.send('OK'.encode())
+                conn.send('OK'.encode("utf-8"))
                 # receive bytes in 1024 blocks
                 recvWriteFile(filename, conn, size)
             else:
                 msg = 'ERROR: unable to create file %s' % filename
-                conn.send(msg.encode())
+                conn.send(msg.encode("utf-8"))
             
 
         ### --- Handle DEL Requests --- ###
         elif request == 'DEL':
-            if verbose:
-                print('server receiving request: ' + request)
             # check permissions
             try:
                 print('server deleting file %s' % filename)
                 os.remove(filename)
-                conn.send('DONE'.encode())
+                conn.send('DONE'.encode("utf-8"))
             except:
                 msg = 'ERROR: unable to delete %s' % filename
-                conn.send(msg.encode())
+                conn.send(msg.encode("utf-8"))
     
-        print "Exiting " + self.name
+        print ("Exiting " + self.name)
+
+class Manager(Thread):
+
+    def __init__(self, numClients):
+        Thread.__init__(self)
+        self.q = collections.deque()
+        self.running = set()
+        self.numClients = numClients
+        self.lock = Lock()
+
+    def checkRunning(self):
+        kick = []
+        if verbose >= 2:
+            print("num running clients in checkRunning()", len(self.running))
+        for t in self.running:
+            if not t.isAlive(): kick.append(t)
+        for t in kick:
+            self.running.remove(t)
+            if verbose >= 1:
+                print("kicked a thread")
+
+    def run(self):
+        while True:
+            self.checkRunning()
+            if (len(self.q) > 0):
+                if (len(self.running) < self.numClients):
+                    if verbose >= 1:
+                        print("num queued ", len(self.q))
+                        print("num running clients", len(self.running))
+                    thread = self.q.popleft()
+                    thread.start()
+                    if verbose >= 1:
+                        print("num running clients now", len(self.running))
+                    self.running.add(thread)
+                    time.sleep(1)
+                else:
+                    if verbose >= 2:
+                        print("sleeping, running set too big")
+                    time.sleep(1)
+            else:
+                if verbose >= 2:
+                    print("sleeping, nothing in queue")
+                time.sleep(1)
+
+    def add(self, conn):
+        self.q.append(conn)
+
+if __name__ == '__main__':
+    # declare variables
+    port = int(sys.argv[1])
+    numClients = int(sys.argv[2])
+    if "-v" in sys.argv:
+        verbose = 1
+    elif "-vv" in sys.argv:
+        verbose = 2
+    else:
+        verbose = False
+
+    # open socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # bind socket to host and port
+    s.bind(('', port))
+    # listen
+    s.listen(4) # <-- how many concurrent clients can be 
+                # queued, waiting for handshake
+
+    if verbose >= 1:
+        print('server waiting on port %s' % port)
+        print('number of concurrent clients: %s' % numClients)
+
+    clientManager = Manager(numClients)
+    clientManager.start()
+
+    while True:
+        conn, addr = s.accept()
+        if verbose >= 1:
+            print('server connected to client at ' + addr[0] + ':' + str(addr[1]))
+        thread = ClientHandler(conn)
+        clientManager.add(thread)
+    
+
+# The ClientHandler class
+
+# You must create a subclass of threading.Thread to handle all communication with a single
+# client.
+
+
 
 # The Manager class
 
     # This class will maintain two data structures: a queue (implemented with a Python
     # collections.deque() object), and a set (implemented with a Python set() object).
 
-class Manager
 
-    self.q = collections.deque()
-    self.running = set()
 
     # The queue will hold all the waiting client connections; they haven’t started yet, they’ve just been
     # added to the queue, waiting to be executed. The main program calls a method of this class to
@@ -199,7 +254,6 @@ class Manager
     # server.py process, and note the pid (second column) number (e.g. 12573)
     # kill <pid> - forces all threads under that process id to stop.
 
-# declare functions
 
 
             
