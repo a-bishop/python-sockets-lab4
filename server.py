@@ -120,7 +120,6 @@ class Manager(Thread):
         self.q = collections.deque()
         self.running = set()
         self.numClients = numClients
-        self.lock = Lock()
 
     def checkRunning(self):
         kick = []
